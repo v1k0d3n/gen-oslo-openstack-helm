@@ -190,8 +190,14 @@ class _HelmOptFormatter(object):
                 {'type': opt.type, 'name': opt.name})
             defaults = _format_defaults(opt)
         for default_str in defaults:
+
+            # alanmeadows(TODO): need to ensure that when we lack a .Values.%s.%s parameter
+            # and if the parameter is normally commented out, we leave it commented out
+            # 
+            # right now, this logic doesn't exist but could be accomplished with the right
+            # {{ if .Values..... }} in the right places around this
             if minimal:
-                lines.append('{{- if .Values.%s.%s }}%s = {{ .Values.%s.%s | default \' %s\' }} {{- end}}\n' % (opt.dest, self.namespace, opt.dest, default_str))
+                lines.append('%%s = {{ .Values.%s.%s | default \' %s\' }}\n' % (opt.dest, self.namespace, opt.dest, default_str))
             else:
                 lines.append('#%s = {{ .Values.%s.%s | default \' %s\' }}\n' % (opt.dest, self.namespace, opt.dest, default_str))
 
