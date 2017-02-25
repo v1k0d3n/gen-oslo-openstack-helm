@@ -15,18 +15,36 @@ from oslo_config._i18n import _LW
 from oslo_config import cfg
 
 from oslo_config.generator import register_cli_opts
-from oslo_config.generator import _format_type_name, _generator_opts, _output_opts, _get_groups, _list_opts, _format_defaults
+from oslo_config.generator import _format_type_name, _generator_opts, _get_groups, _list_opts, _format_defaults
 
 import stevedore.named  # noqa
 
 LOG = logging.getLogger(__name__)
 UPPER_CASE_GROUP_NAMES = ['DEFAULT']
 
+def _output_opts(f, group, group_data, minimal=False, summarize=False):
+    f.format_group(group_data['object'] or group)
+    for (namespace, opts) in sorted(group_data['namespaces'],
+                                    key=operator.itemgetter(0)):
+        f.write('\n#\n# From %s\n#\n' % namespace)
+        for opt in sorted(opts, key=operator.attrgetter('advanced')):
+            try:
+                if minimal and not opt.required:
+                    pass
+                else:
+                    f.write('\n')
+                    f.format(opt, group, namespace, minimal, summarize)
+            except Exception as err:
+                f.write('# Warning: Failed to format sample for %s\n' %
+                        (opt.dest,))
+                f.write('# %s\n' % (err,))
+
+
 class _HelmOptFormatter(object):
 
     """Format configuration option descriptions to a file."""
 
-    def __init__(self, output_file=None, wrap_width=70, namespace=None):
+    def __init__(self, output_file=None, wrap_width=70):
         """Construct an OptFormatter object.
 
         :param output_file: a writeable file object
@@ -34,9 +52,6 @@ class _HelmOptFormatter(object):
         """
         self.output_file = output_file or sys.stdout
         self.wrap_width = wrap_width
-
-        # alanmeadows(TODO): this is a total hack and it does not provide a full path
-        self.namespace = namespace[-1]
 
     def _format_help(self, help_text):
         """Format the help for a group or option to the output file.
@@ -81,7 +96,7 @@ class _HelmOptFormatter(object):
             lines = ['[%s]\n' % groupname]
         self.writelines(lines)
 
-    def format(self, opt, group_name, minimal=False, summarize=False):
+    def format(self, opt, group_name, namespace, minimal=False, summarize=False):
         """Format a description of an option to the output file.
 
         :param opt: a cfg.Opt instance
@@ -190,16 +205,11 @@ class _HelmOptFormatter(object):
                 {'type': opt.type, 'name': opt.name})
             defaults = _format_defaults(opt)
         for default_str in defaults:
-
-            # alanmeadows(TODO): need to ensure that when we lack a .Values.%s.%s parameter
-            # and if the parameter is normally commented out, we leave it commented out
-            # 
-            # right now, this logic doesn't exist but could be accomplished with the right
-            # {{ if .Values..... }} in the right places around this
+            lines.append('# from .Values.conf.%s.%s\n' % (namespace, opt.dest))
             if minimal:
-                lines.append('%%s = {{ .Values.%s.%s | default \' %s\' }}\n' % (opt.dest, self.namespace, opt.dest, default_str))
+                lines.append('%s = {{ .Values.conf.%s.%s | default "%s" }}\n' % (opt.dest, namespace, opt.dest, default_str.replace('"', r'\"')))
             else:
-                lines.append('#%s = {{ .Values.%s.%s | default \' %s\' }}\n' % (opt.dest, self.namespace, opt.dest, default_str))
+                lines.append('{{ if not .Values.conf.%s.%s }}#{{ end }}%s = {{ .Values.conf.%s.%s | default "%s" }}\n' % (namespace, opt.dest, opt.dest, namespace, opt.dest, default_str.replace('"', r'\"')))
 
         self.writelines(lines)
 
@@ -231,8 +241,7 @@ def generate(conf):
                    if conf.output_file else sys.stdout)
 
     formatter = _HelmOptFormatter(output_file=output_file,
-                              wrap_width=conf.wrap_width,
-                              namespace=conf.namespace)
+                              wrap_width=conf.wrap_width)
 
     groups = _get_groups(_list_opts(conf.namespace))
 
