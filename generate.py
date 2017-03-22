@@ -14,13 +14,87 @@ import six
 from oslo_config._i18n import _LW
 from oslo_config import cfg
 
-from oslo_config.generator import register_cli_opts
-from oslo_config.generator import _format_type_name, _generator_opts, _get_groups, _list_opts, _format_defaults
+from oslo_config.generator import _get_groups, _list_opts, _format_defaults
 
 import stevedore.named  # noqa
 
 LOG = logging.getLogger(__name__)
 UPPER_CASE_GROUP_NAMES = ['DEFAULT']
+
+def _format_type_name(opt_type):
+    """Format the type name to use in describing an option"""
+    try:
+        return opt_type.type_name
+    except AttributeError:  # nosec
+        pass
+
+    try:
+        return _TYPE_NAMES[opt_type]
+    except KeyError:  # nosec
+        pass
+
+    return 'unknown value'
+
+
+_generator_opts = [
+    cfg.StrOpt(
+        'output-file',
+        help='Path of the file to write to. Defaults to stdout.'),
+    cfg.IntOpt(
+        'wrap-width',
+        default=70,
+        help='The maximum length of help lines.'),
+    cfg.MultiStrOpt(
+        'namespace',
+        required=True,
+        help='Option namespace under "oslo.config.opts" in which to query '
+        'for options.'),
+    cfg.StrOpt(
+        'helm_namespace',
+        required=True,
+        help="Helm Namespace, e.g. 'keystone'"),
+    cfg.StrOpt(
+        'helm_chart',
+        required=True,
+        help="Helm Chart Name, e.g. 'keystone'"),
+    cfg.BoolOpt(
+        'minimal',
+        default=False,
+        help='Generate a minimal required configuration.'),
+    cfg.BoolOpt(
+        'summarize',
+        default=False,
+        help='Only output summaries of help text to config files. Retain '
+        'longer help text for Sphinx documents.'),
+]
+
+
+def register_cli_opts(conf):
+    """Register the formatter's CLI options with a ConfigOpts instance.
+
+    Note, this must be done before the ConfigOpts instance is called to parse
+    the configuration.
+
+    :param conf: a ConfigOpts instance
+    :raises: DuplicateOptError, ArgsAlreadyParsedError
+    """
+    conf.register_cli_opts(_generator_opts)
+
+
+
+def _output_opts_null(f, group, group_data, minimal=False, summarize=False):
+    pass
+    f.format_group(group_data['object'] or group)
+    for (namespace, opts) in sorted(group_data['namespaces'],
+                                    key=operator.itemgetter(0)):
+        for opt in sorted(opts, key=operator.attrgetter('advanced')):
+            try:
+                if minimal and not opt.required:
+                    pass
+                else:
+                    f.format(opt, group, namespace, minimal, summarize)
+            except Exception as err:
+                pass
 
 def _output_opts(f, group, group_data, minimal=False, summarize=False):
     f.format_group(group_data['object'] or group)
@@ -39,6 +113,160 @@ def _output_opts(f, group, group_data, minimal=False, summarize=False):
                         (opt.dest,))
                 f.write('# %s\n' % (err,))
 
+
+class _ValuesSkeletonFormatter(object):
+
+    """Format configuration option descriptions to a file."""
+
+    def __init__(self, output_file=None, wrap_width=70):
+        """Construct an OptFormatter object.
+
+        :param output_file: a writeable file object
+        :param wrap_width: The maximum length of help lines, 0 to not wrap
+        """
+        self.output_file = output_file or sys.stdout
+        self.wrap_width = wrap_width
+        self.done = []
+
+
+    def _format_help(self, help_text):
+        pass
+
+    def _get_choice_text(self, choice):
+        pass
+
+    def format_group(self, group_or_groupname):
+        pass
+
+    def format(self, opt, group_name, namespace, minimal=False, summarize=False):
+        """Format a description of an option to the output file.
+
+        :param opt: a cfg.Opt instance
+        :param group_name: name of the group to which the opt is assigned
+        :param minimal: enable option by default, marking it as required
+        :param summarize: output a summarized description of the opt
+        :returns: a formatted opt description string
+        """
+
+        if hasattr(opt.type, 'format_defaults'):
+            defaults = opt.type.format_defaults(opt.default,
+                                                opt.sample_default)
+        else:
+            LOG.debug(
+                "The type for option %(name)s which is %(type)s is not a "
+                "subclass of types.ConfigType and doesn't provide a "
+                "'format_defaults' method. A default formatter is not "
+                "available so the best-effort formatter will be used.",
+                {'type': opt.type, 'name': opt.name})
+            defaults = _format_defaults(opt)
+        lines=[]
+        # line = '{{ $x := dict "empty" "dict'
+        for default_str in defaults:
+
+            # alanmeadows(NOTE)
+            # 
+            # avert your eyes, I got lazy.
+            
+            if len(group_name.split('.')) > 1:  
+
+                line = '{{- if not .%s -}}{{- set . "%s" dict -}}{{- end -}}\n' % (group_name.lower().split('.')[0], group_name.lower().split('.')[0])
+
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+                line = '{{- if not .%s.%s -}}{{- set .%s "%s" dict -}}{{- end -}}\n' % (group_name.lower().split('.')[0], 
+                                                                                  group_name.lower().split('.')[1],
+                                                                                  group_name.lower().split('.')[0],
+                                                                                  group_name.lower().split('.')[1])
+                
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            else:
+
+                line = '{{- if not .%s -}}{{- set . "%s" dict -}}{{- end -}}\n' % (group_name.lower(), group_name.lower())
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            if len(namespace.split('.')) == 1:                
+                line = '{{- if not .%s.%s -}}{{- set .%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), namespace, group_name.lower(), namespace)
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            if len(namespace.split('.')) > 1:  
+
+                line = '{{- if not .%s.%s -}}{{- set .%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), namespace.split('.')[0], group_name.lower(), namespace.split('.')[0])
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+                line = '{{- if not .%s.%s.%s -}}{{- set .%s.%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), \
+                                                                                       namespace.split('.')[0], \
+                                                                                       namespace.split('.')[1], \
+                                                                                       group_name.lower(), \
+                                                                                       namespace.split('.')[0], \
+                                                                                       namespace.split('.')[1])
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            if len(namespace.split('.')) > 2:  
+                line = '{{- if not .%s.%s.%s.%s -}}{{- set .%s.%s.%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), \
+                                                                                            namespace.split('.')[0], \
+                                                                                            namespace.split('.')[1], \
+                                                                                            namespace.split('.')[2], \
+                                                                                            group_name.lower(), \
+                                                                                            namespace.split('.')[0], \
+                                                                                            namespace.split('.')[1], \
+                                                                                            namespace.split('.')[2])
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            if len(opt.dest.split('.')) > 1:
+                line = '{{- if not .%s.%s.%s -}}{{- set .%s.%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), \
+                                                                                        namespace, \
+                                                                                        opt.dest.split('.')[0], \
+                                                                                        group_name.lower(), \
+                                                                                        namespace, \
+                                                                                        opt.dest.split('.')[0])
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+            if len(opt.dest.split('.')) > 2:
+                line = '{{- if not .%s.%s.%s.%s -}}{{- set .%s.%s.%s "%s" dict -}}{{- end -}}\n' % (group_name.lower(), \
+                                                                                              namespace, \
+                                                                                              opt.dest.split('.')[0], \
+                                                                                              opt.dest.split('.')[1], \
+                                                                                              group_name.lower(), \
+                                                                                              namespace, \
+                                                                                              opt.dest.split('.')[0], \
+                                                                                              opt.dest.split('.')[1])
+                if line not in self.done:
+                    self.done.append(line)
+                    lines.append(line)
+
+        if lines:
+            self.writelines(lines)
+
+    def write(self, s):
+        """Write an arbitrary string to the output file.
+
+        :param s: an arbitrary string
+        """
+        self.output_file.write(s)
+
+    def writelines(self, l):
+        """Write an arbitrary sequence of strings to the output file.
+
+        :param l: a list of arbitrary strings
+        """
+        self.output_file.writelines(l)
 
 class _HelmOptFormatter(object):
 
@@ -203,13 +431,18 @@ class _HelmOptFormatter(object):
                 "'format_defaults' method. A default formatter is not "
                 "available so the best-effort formatter will be used.",
                 {'type': opt.type, 'name': opt.name})
-            defaults = _format_defaults(opt)
+             
         for default_str in defaults:
-            lines.append('# from .Values.conf.%s.%s\n' % (namespace, opt.dest))
-            if minimal:
-                lines.append('%s = {{ .Values.conf.%s.%s | default "%s" }}\n' % (opt.dest, namespace, opt.dest, default_str.replace('"', r'\"')))
+            if type(opt) in [cfg.MultiOpt, cfg.MultiStrOpt]:
+                lines.append('# from .%s.%s.%s (multiopt)\n' % (group_name.lower(), namespace, opt.dest))
+                lines.append('{{ if not .%s.%s.%s }}#%s = {{ .%s.%s.%s | default "%s" }}{{ else }}{{ range .%s.%s.%s }}%s = {{ . }}{{ end }}{{ end }}\n' % (group_name.lower(), namespace, opt.dest, opt.dest, group_name.lower(), namespace, opt.dest, default_str.replace('"', r'\"'), group_name.lower(), namespace, opt.dest, opt.dest))
+
             else:
-                lines.append('{{ if not .Values.conf.%s.%s }}#{{ end }}%s = {{ .Values.conf.%s.%s | default "%s" }}\n' % (namespace, opt.dest, opt.dest, namespace, opt.dest, default_str.replace('"', r'\"')))
+                lines.append('# from .%s.%s.%s\n' % (group_name.lower(), namespace, opt.dest))
+                if minimal:
+                    lines.append('%s = {{ .%s.%s.%s | default "%s" }}\n' % (opt.dest, group_name.lower(), namespace, opt.dest, default_str.replace('"', r'\"')))
+                else:
+                    lines.append('{{ if not .%s.%s.%s }}#{{ end }}%s = {{ .%s.%s.%s | default "%s" }}\n' % (group_name.lower(), namespace, opt.dest, opt.dest, group_name.lower(), namespace, opt.dest, default_str.replace('"', r'\"')))
 
         self.writelines(lines)
 
@@ -240,6 +473,56 @@ def generate(conf):
     output_file = (open(conf.output_file, 'w')
                    if conf.output_file else sys.stdout)
 
+    output_file.write('''
+# Copyright 2017 The Openstack-Helm Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{ include "%s.conf.%s_values_skeleton" .Values.conf.%s | trunc 0 }}
+{{ include "%s.conf.%s" .Values.conf.%s }}
+\n''' % (conf.helm_chart, conf.helm_namespace, conf.helm_namespace, conf.helm_chart, conf.helm_namespace, conf.helm_namespace))
+
+
+    output_file.write('''
+{{- define "%s.conf.%s_values_skeleton" -}}
+\n''' % (conf.helm_chart, conf.helm_namespace))
+
+    ### values skeleton 
+    formatter = _ValuesSkeletonFormatter(output_file=output_file,
+                              wrap_width=conf.wrap_width)
+
+    groups = _get_groups(_list_opts(conf.namespace))
+
+    # Output the "DEFAULT" section as the very first section
+    _output_opts_null(formatter, 'DEFAULT', groups.pop('DEFAULT'), conf.minimal,
+                 conf.summarize)
+
+    # output all other config sections with groups in alphabetical order
+    for group, group_data in sorted(groups.items()):
+        _output_opts_null(formatter, group, group_data, conf.minimal,
+                     conf.summarize)
+
+    output_file.write('''
+{{- end -}}
+\n''')
+
+    output_file.write('''
+{{- define "%s.conf.%s" -}}
+\n''' % (conf.helm_chart, conf.helm_namespace))
+
+
+    ### helm options
+
     formatter = _HelmOptFormatter(output_file=output_file,
                               wrap_width=conf.wrap_width)
 
@@ -255,6 +538,10 @@ def generate(conf):
         _output_opts(formatter, group, group_data, conf.minimal,
                      conf.summarize)
 
+
+    output_file.write('''
+{{- end -}}
+\n''')
 
 
 # generate helm defaults
